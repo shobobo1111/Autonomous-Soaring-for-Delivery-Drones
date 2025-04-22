@@ -1,0 +1,485 @@
+% test_multi_step_path.m
+clear all; close all; clc;
+
+aircraft = init_aircraft();
+battery = init_battery();
+waypoint = init_waypoint();
+
+%% Set up simulation mode
+% You can switch between these two modes
+simulation_mode = 'ridge_lift'; % 'ridge_lift' or 'thermal'
+
+
+%% Create wind field based on simulation mode
+if strcmp(simulation_mode, 'thermal')
+    % For thermal simulation, use manually defined grid
+    x_limits = [-100, 2000];   
+    y_limits = [-500, 500];   
+    z_limits = [0, 800];     
+    grid_spacing = 20;   % 20 works for 500X500X500 space
+
+    % Create wind field structure
+    wind_field = init_wind_field(x_limits, y_limits, z_limits, grid_spacing);
+    
+    % Add desired thermal pattern
+    fprintf('Creating thermal updraft field...\n');
+    wind_field = create_thermals(wind_field, 'drifting_sys');  % Options: 'simple', 'complex', 'drifting', etc.
+
+    
+elseif strcmp(simulation_mode, 'ridge_lift')
+    % For ridge lift, derive wind field dimensions from terrain data
+    fprintf('Loading terrain data...\n');
+    terrain_data = load('terrain_data.mat');
+    
+    % Calculate terrain extents in meters
+    lat_center = mean(terrain_data.y);
+    lon_scale = 111000 * cos(lat_center * pi/180);  % meters per degree longitude
+    lat_scale = 111000;  % meters per degree latitude
+    
+    % Convert terrain coordinates to meters
+    x_meters = (terrain_data.x - mean(terrain_data.x)) * lon_scale;
+    y_meters = (terrain_data.y - mean(terrain_data.y)) * lat_scale;
+    
+    % Get terrain dimensions
+    [terrain_ny, terrain_nx] = size(terrain_data.terrain);
+    
+    % Calculate terrain extents for wind field initialization
+    x_limits = [min(x_meters), max(x_meters)];
+    y_limits = [min(y_meters), max(y_meters)];
+    z_limits = [0, 900];  % Altitude range above terrain
+    
+    fprintf('Terrain dimensions: [%d, %d]\n', terrain_ny, terrain_nx);
+    fprintf('Terrain extents (meters):\n');
+    fprintf('  X range: %.2f to %.2f (%.2f meters)\n', x_limits(1), x_limits(2), diff(x_limits));
+    fprintf('  Y range: %.2f to %.2f (%.2f meters)\n', y_limits(1), y_limits(2), diff(y_limits));
+    
+    % Create exact grid to match terrain dimensions
+    x = linspace(x_limits(1), x_limits(2), terrain_nx);
+    y = linspace(y_limits(1), y_limits(2), terrain_ny);
+    z = linspace(z_limits(1), z_limits(2), 32);  % 32 z-levels is typically sufficient
+    
+    % Create wind field structure directly
+    [X, Y, Z] = meshgrid(x, y, z);
+    wind_field = struct();
+    wind_field.x = x;
+    wind_field.y = y;
+    wind_field.z = z;
+    wind_field.X = X;
+    wind_field.Y = Y;
+    wind_field.Z = Z;
+    wind_field.Wx = zeros(size(X));
+    wind_field.Wy = zeros(size(X));
+    wind_field.U = zeros(size(X));
+    
+    % Calculate average grid spacing for reference (not used for grid creation)
+    grid_spacing_x = (x_limits(2) - x_limits(1)) / (terrain_nx - 1);
+    grid_spacing_y = (y_limits(2) - y_limits(1)) / (terrain_ny - 1);
+    grid_spacing = mean([grid_spacing_x, grid_spacing_y]);
+    fprintf('  Creating wind field with average spacing %.2f m\n', grid_spacing);
+    
+    % Verify wind field dimensions
+    [wy, wx, wz] = size(wind_field.X);
+    fprintf('Wind field dimensions: [%d, %d, %d]\n', wy, wx, wz);
+    
+    % Create ridge lift
+    wind_speed = 5; % m/s
+    wind_direction = 90; % degrees (wind from west)
+    fprintf('Creating ridge lift with %.1f m/s wind from %.0f degrees...\n', wind_speed, wind_direction);
+    wind_field = create_ridge_lift(terrain_data, wind_speed, wind_direction, wind_field);
+ 
+end
+
+%% Set remaining initial conditions (same for both modes)
+% Position UAV at appropriate location over terrain
+initial_state.x = -500; % -100 for ridge
+initial_state.y = 800; % 500 for ridge
+initial_state.z = 700; % 700 for ridge
+initial_state.V = 15;        % m/s
+initial_state.V_rel = 15;    % m/s
+initial_state.gamma = 0;     % rad
+initial_state.phi = 0;       % rad
+initial_state.psi = 0;       % rad
+
+%% Generate multi-step path
+num_steps = 200;
+fprintf('Generating multi-step path...\n');
+complete_path = generate_multi_step_path(initial_state, aircraft, wind_field, num_steps, battery);
+
+%% Plot results based on simulation mode
+fprintf('Generating visualization...\n');
+if strcmp(simulation_mode, 'ridge_lift')
+    % Include terrain data in plot for ridge lift mode
+    plot_and_save(complete_path, wind_field, initial_state, aircraft, terrain_data);
+else
+    % Standard thermal plotting (no terrain)
+    plot_and_save(complete_path, wind_field, initial_state, aircraft);
+end
+
+% Summary statistics
+thrust_levels = complete_path.states.thrust;
+total_flight_time = complete_path.steps * 2; % seconds
+fprintf('\nSummary:\n');
+fprintf('Total flight time: %.1f seconds\n', total_flight_time);
+fprintf('Average thrust: %.2f\n', mean(thrust_levels));
+fprintf('Time spent at zero thrust: %.1f seconds (%.1f%%)\n', ...
+    sum(thrust_levels == 0)*2, sum(thrust_levels == 0)*2/total_flight_time*100);
+fprintf('Time spent at low thrust: %.1f seconds (%.1f%%)\n', ...
+    sum(thrust_levels == 10)*2, sum(thrust_levels == 10)*2/total_flight_time*100);
+fprintf('Time spent at full thrust: %.1f seconds (%.1f%%)\n', ...
+    sum(thrust_levels == 20)*2, sum(thrust_levels == 20)*2/total_flight_time*100);
+
+
+% % test_multi_step_path.m
+% clear all; close all; clc;
+% 
+% aircraft = init_aircraft();
+% battery = init_battery();
+% waypoint = init_waypoint();
+% 
+% %% Create wind field
+% % Define grid to match flight space
+% % x_limits = [-300, 2000];   
+% % y_limits = [-350, 350];   
+% % z_limits = [0, 800];     
+% 
+% x_limits = [-660, 660];   
+% y_limits = [-660, 660];   
+% z_limits = [0, 900];     
+% grid_spacing = 20;   % 20 works for 500X500X500 space
+% 
+% % % Create wind field structure
+% % wind_field = init_wind_field(x_limits, y_limits, z_limits, grid_spacing);
+% % % 
+% % % Add desired thermal pattern
+% % wind_field = create_thermals(wind_field, 'simple_sys');  % 'simple', 'complex', 'drifting', 'twisting', 'thermal_with_sink', 'sink_drift_complex', 'simple_sys'
+% 
+% 
+% % Load terrain data
+% terrain_data = load('terrain_data.mat');
+% 
+% % Extract terrain dimensions for wind field initialisation
+% x = terrain_data.x;
+% y = terrain_data.y;
+% z_agl = terrain_data.z_agl;
+% 
+% % Calculate the proper range and convert to meters for better scaling
+% % Convert degrees to meters (approximate conversion at your latitude)
+% longitude_scale = 111000 * cos(mean(y) * pi/180); % meters per degree longitude at this latitude
+% latitude_scale = 111000; % meters per degree latitude (approximately)
+% 
+% % Convert to meters
+% x_meters = (x - mean(x)) * longitude_scale;
+% y_meters = (y - mean(y)) * latitude_scale;
+% 
+% fprintf('X range in meters: %.2f to %.2f (%.2f meters)\n', ...
+%     min(x_meters), max(x_meters), max(x_meters) - min(x_meters));
+% fprintf('Y range in meters: %.2f to %.2f (%.2f meters)\n', ...
+%     min(y_meters), max(y_meters), max(y_meters) - min(y_meters));
+% % 
+% % % % Create limits in meters
+% % x_limits = [min(x_meters), max(x_meters)];
+% % y_limits = [min(y_meters), max(y_meters)];
+% % 
+% % z_limits = [min(z_agl), max(z_agl)];
+% % % grid_spacing = (max(x) - min(x)) / (length(x) - 1);  % Assuming uniform spacing
+% 
+% % Create wind field structure
+% wind_field = init_wind_field(x_limits, y_limits, z_limits, grid_spacing);
+% 
+% % Create wind field
+% wind_speed = 4; % m/s
+% wind_direction = 0; % degrees (wind from west)
+% wind_field = create_ridge_lift(terrain_data, wind_speed, wind_direction, wind_field);
+% 
+% 
+% % % Add constant wind with thermal
+% % thermal_center = [25, 50];
+% % thermal_strength = 5;    % m/s vertical
+% % thermal_radius = 20;     % meters
+% % constant_wind = [0, 0, 0];  % [Wx, Wy, Wz] background wind (m/s)
+% % 
+% % % Fill wind components
+% % for i = 1:length(wind_field.x)
+% %     for j = 1:length(wind_field.y)
+% %         for k = 1:length(wind_field.z)
+% %             % Calculate distance from thermal center
+% %             r = sqrt((wind_field.X(j,i,k) - thermal_center(1))^2 + ...
+% %                     (wind_field.Y(j,i,k) - thermal_center(2))^2);
+% % 
+% %             % Combine thermal with constant wind
+% %             wind_field.Wx(j,i,k) = constant_wind(1);
+% %             wind_field.Wy(j,i,k) = constant_wind(2);
+% %             wind_field.U(j,i,k) = thermal_strength * exp(-(r/thermal_radius)^2) + constant_wind(3);
+% %         end
+% %     end
+% % end
+% 
+% %% Initial conditions
+% initial_state.x = -400;
+% initial_state.y = -400;
+% initial_state.z = 450;
+% initial_state.V = 15;        % m/s
+% initial_state.V_rel = 15;    % m/s
+% initial_state.gamma = 0;     % rad
+% initial_state.phi = 0;       % rad
+% initial_state.psi = 0;       % rad
+% 
+% %% Generate multi-step path
+% num_steps = 1;
+% complete_path = generate_multi_step_path(initial_state, aircraft, wind_field, num_steps, battery);
+% 
+% %% Plot results
+% % Create plots
+% plot_and_save(complete_path, wind_field, initial_state, aircraft, terrain_data);
+% 
+% % figure(1)
+% % % Plot wind field
+% % quiver3(wind_field.X, wind_field.Y, wind_field.Z, ...
+% %     wind_field.Wx, wind_field.Wy, wind_field.U, ...
+% %     'Color', [0.7 0.7 0.7], 'LineWidth', 0.01);  % Light grey color
+% % hold on
+% % 
+% % % % Plot complete path with velocity-based coloring
+% % % velocities = complete_path.states.V;
+% % % normalized_velocities = (velocities - 0) / ...
+% % %     (aircraft.max_speed - 0);
+% % % colors = jet(100);  % Create colormap
+% % % 
+% % % % Plot path segments
+% % % for i = 1:length(velocities)-1
+% % %     color_idx = max(1, min(100, round(normalized_velocities(i) * 99) + 1));
+% % %     plot3([complete_path.states.x(i), complete_path.states.x(i+1)], ...
+% % %           [complete_path.states.y(i), complete_path.states.y(i+1)], ...
+% % %           [complete_path.states.z(i), complete_path.states.z(i+1)], ...
+% % %           'Color', colors(color_idx,:), 'LineWidth', 2);
+% % % end
+% % % 
+% % % waypoint = init_waypoint();  % Get waypoint info
+% % % plot3(waypoint.x, waypoint.y, waypoint.z, 'r*', ...
+% % %     'MarkerSize', 10, ...
+% % %     'LineWidth', 2);
+% % % 
+% % % % Add colorbar
+% % % c = colorbar;
+% % % ylabel(c, 'Velocity (m/s)')
+% % % % Set colorbar ticks to actual velocity values
+% % % cticks = linspace(0, 1, 5);
+% % % cticklabels = linspace(0, (aircraft.max_speed), 5);
+% % % c.Ticks = cticks;
+% % % c.TickLabels = arrayfun(@(x) sprintf('%.1f', x), cticklabels, 'UniformOutput', false);
+% % 
+% % % Plot complete path with velocity-based coloring based on actual data range
+% % % Plot complete path with velocity-based coloring based on actual data range
+% % velocities = complete_path.states.V;
+% % vel_min = aircraft.min_speed -3;
+% % vel_max = aircraft.max_speed -5;
+% % % Normalise based on actual velocity range in this simulation
+% % normalized_velocities = (velocities - vel_min) / (vel_max - vel_min);
+% % 
+% % % Define custom colormap using the provided hex values
+% % % Use cell array format for the colors
+% % custom_colors = {
+% %     '#9e0142', '#d53e4f', '#f46d43', '#fdae61', '#fee08b', ...
+% %     '#e6f598', '#abdda4', '#66c2a5', '#3288bd', '#5e4fa2'
+% % };
+% % 
+% % % Convert hex to RGB
+% % custom_rgb = zeros(length(custom_colors), 3);
+% % for i = 1:length(custom_colors)
+% %     % Extract RGB values from hex (removing the # symbol)
+% %     hex = custom_colors{i}(2:end);
+% %     custom_rgb(i, 1) = hex2dec(hex(1:2))/255; % Red
+% %     custom_rgb(i, 2) = hex2dec(hex(3:4))/255; % Green
+% %     custom_rgb(i, 3) = hex2dec(hex(5:6))/255; % Blue
+% % end
+% % 
+% % % Interpolate to create a 100-step colormap
+% % custom_cmap = interp1(linspace(0, 1, size(custom_rgb, 1)), custom_rgb, linspace(0, 1, 100));
+% % 
+% % % Plot path segments
+% % for i = 1:length(velocities)-1
+% %     color_idx = max(1, min(100, round(normalized_velocities(i) * 99) + 1));
+% %     plot3([complete_path.states.x(i), complete_path.states.x(i+1)], ...
+% %           [complete_path.states.y(i), complete_path.states.y(i+1)], ...
+% %           [complete_path.states.z(i), complete_path.states.z(i+1)], ...
+% %           'Color', custom_cmap(color_idx,:), 'LineWidth', 2);
+% % end
+% % 
+% % plot3(waypoint.x, waypoint.y, waypoint.z, 'r*', ...
+% %     'MarkerSize', 10, ...
+% %     'LineWidth', 2);
+% % 
+% % % Set colormap for the figure
+% % colormap(custom_cmap);
+% % clim([0 1]);  % Force colorbar to show full range
+% % 
+% % % Add colorbar with accurate speed labels
+% % c = colorbar;
+% % ylabel(c, 'Velocity (m/s)')
+% % 
+% % % Set colorbar ticks to actual velocity values from the data
+% % cticks = linspace(0, 1, 5);
+% % cticklabels = linspace(vel_min, vel_max, 5);
+% % c.Ticks = cticks;
+% % c.TickLabels = arrayfun(@(x) sprintf('%.1f', x), cticklabels, 'UniformOutput', false);
+% % 
+% % % Mark start point
+% % plot3(initial_state.x, initial_state.y, initial_state.z, ...
+% %     'go', 'MarkerSize', 10, 'LineWidth', 2)
+% % 
+% % % Format plot
+% % xlabel('X (m)')
+% % ylabel('Y (m)')
+% % zlabel('Z (m)')
+% % title('Multi-Step Optimised Path (Color = Velocity)')
+% % grid on
+% % view(3)
+% % axis equal
+% % 
+% % 
+% % % Print thrust history for battery estimation
+% % fprintf('\nThrust Level History:\n');
+% % for i = 1:length(complete_path.states.thrust)
+% %     fprintf('Step %d: Thrust = %.1f\n', i, complete_path.states.thrust(i));
+% % end
+% 
+% % Summary statistics
+% thrust_levels = complete_path.states.thrust;
+% total_flight_time = complete_path.steps * 2; % seconds
+% fprintf('\nSummary:\n');
+% fprintf('Total flight time: %.1f seconds\n', total_flight_time);
+% fprintf('Average thrust: %.2f\n', mean(thrust_levels));
+% fprintf('Time spent at zero thrust: %.1f seconds (%.1f%%)\n', ...
+%     sum(thrust_levels == 0)*2, sum(thrust_levels == 0)*2/total_flight_time*100);
+% fprintf('Time spent at low thrust: %.1f seconds (%.1f%%)\n', ...
+%     sum(thrust_levels == 10)*2, sum(thrust_levels == 10)*2/total_flight_time*100);
+% fprintf('Time spent at full thrust: %.1f seconds (%.1f%%)\n', ...
+%     sum(thrust_levels == 20)*2, sum(thrust_levels == 20)*2/total_flight_time*100); % update thrust_levels == based on which ones are set
+% 
+% 
+% 
+% % % Create a new figure for V vs V_rel comparison
+% % figure(2)
+% 
+% % Get the data
+% v_ground = complete_path.states.V;
+% v_air = complete_path.states.V_rel;
+% data_length = length(v_ground);
+% % 
+% % % Create a simple time axis that matches the data length
+% % time_axis = linspace(0, complete_path.steps*2, data_length);
+% 
+% % % Basic plot with both velocities
+% % plot(time_axis, v_ground, 'b-', 'LineWidth', 2);
+% % hold on;
+% % plot(time_axis, v_air, 'r--', 'LineWidth', 2);
+% % 
+% % % Add labels and legend
+% % xlabel('Time (seconds)');
+% % ylabel('Velocity (m/s)');
+% % title(sprintf('Ground Speed vs Airspeed (%.1f second simulation)', complete_path.steps*2));
+% % legend('Ground Speed (V)', 'Airspeed (V_{rel})', 'Location', 'best');
+% % grid on;
+% 
+% % Print some basic stats
+% fprintf('Simulation steps: %d (%.1f seconds)\n', complete_path.steps, complete_path.steps*2);
+% fprintf('Data points: %d\n', data_length);
+% fprintf('Average difference between ground and air speed: %.2f m/s\n', mean(abs(v_ground - v_air)));
+% 
+% % % Print path details
+% % fprintf('\nPath Details (Sorted by Reward):\n')
+% % fprintf('Time: %.1f s\n', elapsed_time);
+% % fprintf('Path\tBank°\tPitch°\tNav Reward\tTotal Reward\tEnd Position (x,y,z)\n')
+% % for i = 1:length(paths)
+% %     fprintf('%d\t%.1f\t%.1f\t%.1f\t\t%.1f\t\t(%.1f, %.1f, %.1f)\n', ...
+% %         i, ...
+% %         paths(i).bank_angle*(180/pi), ...
+% %         paths(i).pitch_angle*(180/pi), ...
+% %         paths(i).navigation_reward, ...
+% %         paths(i).total_reward, ...
+% %         paths(i).states.x(end), ...
+% %         paths(i).states.y(end), ...
+% %         paths(i).states.z(end))
+% % end
+% 
+% % % Plot angle changes
+% % figure(2)
+% % time = 1:length(complete_path.states.phi);
+% % subplot(3,1,1)
+% % plot(time, complete_path.states.phi*180/pi, 'LineWidth', 2)
+% % ylabel('Bank Angle (deg)')
+% % grid on
+% % 
+% % subplot(3,1,2)
+% % plot(time, complete_path.states.gamma*180/pi, 'LineWidth', 2)
+% % ylabel('Pitch Angle (deg)')
+% % grid on
+% % 
+% % subplot(3,1,3)
+% % plot(time, complete_path.states.psi*180/pi, 'LineWidth', 2)
+% % ylabel('Heading Angle (deg)')
+% % grid on
+% % xlabel('Time Step')
+% 
+% % analyze_path_steps(complete_path);
+% % 
+% % function analyze_path_steps(path)
+% %     fprintf('\nStep-by-Step Path Analysis:\n');
+% %     fprintf('Step\tPosition (x,y,z)\t\tVelocity (m/s)\tHeading (deg)\n');
+% %     fprintf('-------------------------------------------------------------------------\n');
+% % 
+% %     for i = 1:length(path.states.x)
+% %         % Calculate heading from position changes
+% %         if i > 1
+% %             dx = path.states.x(i) - path.states.x(i-1);
+% %             dy = path.states.y(i) - path.states.y(i-1);
+% %             heading_deg = atan2d(dy, dx);
+% %         else
+% %             heading_deg = 0;  % Initial heading
+% %         end
+% % 
+% %         % Format position with consistent spacing
+% %         pos_str = sprintf('(%.1f, %.1f, %.1f)', ...
+% %                          path.states.x(i), ...
+% %                          path.states.y(i), ...
+% %                          path.states.z(i));
+% % 
+% % 
+% %         fprintf('%d\t%-20s\t%.1f\t\t%.1f\n', ...
+% %                 i, ...
+% %                 pos_str, ...
+% %                 path.states.V(i), ...
+% %                 heading_deg);
+% %     end
+% % end
+% % 
+% % % Create new figure for path-only visualization
+% % figure(3)
+% % set(gcf, 'Color', 'none'); % Transparent background
+% % hold on
+% % 
+% % % Plot path segments with velocity-based coloring (same as before)
+% % for i = 1:length(velocities)-1
+% %     color_idx = max(1, min(100, round(normalized_velocities(i) * 99) + 1));
+% %     plot3([complete_path.states.x(i), complete_path.states.x(i+1)], ...
+% %           [complete_path.states.y(i), complete_path.states.y(i+1)], ...
+% %           [complete_path.states.z(i), complete_path.states.z(i+1)], ...
+% %           'Color', colors(color_idx,:), 'LineWidth', 2);
+% % end
+% % 
+% % % Plot start point
+% % plot3(initial_state.x, initial_state.y, initial_state.z, ...
+% %     'go', 'MarkerSize', 10, 'LineWidth', 2)
+% % 
+% % % Plot waypoint
+% % plot3(waypoint.x, waypoint.y, waypoint.z, 'r*', ...
+% %     'MarkerSize', 10, 'LineWidth', 2);
+% % 
+% % % Format plot for clean output
+% % set(gca, 'Color', 'none'); % Transparent axis background
+% % set(gca, 'visible', 'off'); % Hide axis lines
+% % view(3)
+% % axis equal
+% % 
+% % % Save as SVG with transparency
+% % saveas(gcf, 'path_only.svg');

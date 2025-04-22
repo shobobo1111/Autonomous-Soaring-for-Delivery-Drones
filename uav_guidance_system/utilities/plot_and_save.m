@@ -1,0 +1,1431 @@
+% function fig_handle = plot_and_save(complete_path, wind_field, initial_state, aircraft, terrain_data, varargin)
+%     %% Parse optional parameters
+%     p = inputParser;
+%     addOptional(p, 'load_file', '', @ischar);  % Filename to load
+%     addParameter(p, 'save_data', true, @islogical);  % Whether to save data
+%     parse(p, varargin{:});
+% 
+%     load_file = p.Results.load_file;
+%     save_data = p.Results.save_data;
+
+function fig_handle = plot_and_save(complete_path, wind_field, initial_state, aircraft, terrain_data, varargin)
+    % Make terrain_data optional by checking if it exists and is a struct
+    terrain_data_available = exist('terrain_data', 'var') && ~isempty(terrain_data) && isstruct(terrain_data);
+
+    if ~terrain_data_available
+        terrain_data = [];
+    end
+
+    % Parse other optional parameters
+    p = inputParser;
+    addOptional(p, 'load_file', '', @ischar);
+    addParameter(p, 'save_data', true, @islogical);
+    parse(p, varargin{:});
+
+    load_file = p.Results.load_file;
+    save_data = p.Results.save_data;
+
+    %% Setup data storage directories
+    % Create base folder for data storage
+    base_folder = 'simulation_data';
+    if ~exist(base_folder, 'dir')
+        mkdir(base_folder);
+    end
+
+    % Get current date in yyyyMMdd format using datetime
+    current_time = datetime('now');
+    current_date = char(string(current_time, 'yyyyMMdd'));
+
+    % Create date folder
+    date_folder = fullfile(base_folder, current_date);
+    if ~exist(date_folder, 'dir')
+        mkdir(date_folder);
+    end
+
+    %% Load data if requested
+    if ~isempty(load_file)
+        try
+            % Check if full path or just filename
+            [~, ~, ext] = fileparts(load_file);
+            if isempty(ext)
+                load_file = [load_file, '.mat']; % Add extension if missing
+            end
+
+            if ~contains(load_file, filesep)
+                % If no path separator, assume it's in the current date folder
+                load_file = fullfile(date_folder, load_file);
+                fprintf(load_file); 
+            else
+                % Extract date folder from the full path
+                path_parts = strsplit(load_file, filesep);
+                if length(path_parts) >= 3 && strcmp(path_parts{1}, 'simulation_data')
+                    % Update date_folder to match the provided path's date folder
+                    date_folder = fullfile(path_parts{1}, path_parts{2});
+                end
+            end
+
+            data = load(load_file);
+            complete_path = data.complete_path;
+            wind_field = data.wind_field;
+            initial_state = data.initial_state;
+            aircraft = data.aircraft;
+            fprintf('Data loaded from: %s\n', load_file);
+        catch err
+            error('Error loading data from %s: %s', load_file, err.message);
+        end
+    else
+        %% Save new data if requested
+        if save_data
+            % Get current time
+            % Create datetime object
+            current_time = datetime('now');
+
+            % Format it to string
+            time_str = char(string(current_time, 'HH:mm'));
+
+            % Find existing files in today's folder
+            files = dir(fullfile(date_folder, '*_flight_data_*.mat'));
+            if isempty(files)
+                next_num = 1;
+            else
+                % Extract numbers from filenames
+                nums = zeros(length(files), 1);
+                for i = 1:length(files)
+                    parts = split(files(i).name, '_');
+                    nums(i) = str2double(parts{1});
+                end
+                next_num = max(nums) + 1;
+            end
+
+            % Create filename
+            filename = sprintf('%d_flight_data_%s.mat', next_num, time_str);
+            full_path = fullfile(date_folder, filename);
+
+            % Save data
+            save(full_path, 'complete_path', 'wind_field', 'initial_state', 'aircraft');
+            fprintf('Data saved to: %s\n', full_path);
+
+            % Store the base filename for later use in plot export
+            base_filename = sprintf('%d_flight_%s', next_num, time_str);
+        end
+    end
+
+    %% Generate the plots
+    % Prepare export info for the plotting function
+    export_info = struct();
+    export_info.date_folder = date_folder;
+
+    if ~isempty(load_file)
+        % Extract base number from loaded file
+        [~, load_name, ~] = fileparts(load_file);
+        parts = split(load_name, '_');
+        export_info.original_num = parts{1};
+        export_info.is_loaded = true;
+    else
+        export_info.is_loaded = false;
+        if exist('base_filename', 'var')
+            export_info.base_filename = base_filename;
+        end
+    end
+
+    % Add after loading the file and before calling plotting functions
+    if export_info.is_loaded
+        original_num = export_info.original_num;
+        plot_pattern = fullfile(date_folder, [original_num, '_*_*.png']);
+        existing_plots = dir(plot_pattern);
+
+        if isempty(existing_plots)
+            export_info.sub_num = 1;
+        else
+            % Extract sub-numbers and find the highest
+            sub_nums = [];
+            for i = 1:length(existing_plots)
+                name_parts = split(existing_plots(i).name, '_');
+                if length(name_parts) >= 2
+                    num = str2double(name_parts{2});
+                    if ~isnan(num)  % Only add valid numbers
+                        sub_nums = [sub_nums, num];
+                    end
+                end
+            end
+
+            if isempty(sub_nums)
+                export_info.sub_num = 1;
+            else
+                export_info.sub_num = max(sub_nums) + 1;
+            end
+        end
+
+        fprintf('Using sub-number: %d\n', export_info.sub_num);
+    end
+
+    % this is here if we want to old tests with new aircraft paramters
+    % this would only make sense for a new max speed as that doesnt really
+    % determine anything about the flight path, other changes wouldnt
+    % actually be represented
+    % aircraft = init_aircraft();
+
+    % here we define the colours:
+    % [custom_cmap, named_colors] = init_colour();
+
+
+    % Generate 3D flight path plot
+    fig_handle = plot_3d_path(complete_path, wind_field, initial_state, aircraft, export_info, terrain_data, terrain_data_available);
+    plot_multi_metrics(complete_path, aircraft, export_info);
+    % plot_velocity_comparison(complete_path, aircraft, export_info);
+
+end
+
+
+
+
+
+
+
+function fig_handle = plot_3d_path(complete_path, wind_field, initial_state, aircraft, export_info, terrain_data, terrain_data_available)
+    %% Plot 3D flight path with wind field
+    %
+    % Inputs:
+    %   complete_path - Structure containing full path and state information
+    %   wind_field    - Structure containing wind field data
+    %   initial_state - Structure with initial aircraft state
+    %   aircraft      - Structure with aircraft parameters
+    %   export_info   - Structure with export settings
+    %   terrain_data  - (Optional) Structure with terrain data
+    %
+    % Output:
+    %   fig_handle    - Handle to the created figure
+
+    %% Set up global plotting settings
+    set(0, 'DefaultAxesFontSize', 12);
+    set(0, 'DefaultFigureColor', 'w');
+    set(0, 'DefaultTextInterpreter', 'tex');
+    set(0, 'DefaultAxesFontName', 'Times New Roman');
+    set(0, 'DefaultTextFontName', 'Times New Roman');
+
+    %% Create the figure
+    % Get waypoint information
+    waypoint = init_waypoint();
+
+    % Create figure with thesis-appropriate dimensions
+    fig_handle = figure;
+    set(fig_handle, 'Units', 'centimeters');
+    set(fig_handle, 'Position', [0 0 17 10]); % Width and height in centimeters
+
+    %% Plot terrain if available
+
+
+    if terrain_data_available
+        try
+            % Get coordinate conversion factors
+            lat_center = mean(terrain_data.y);
+            lon_scale = 111000 * cos(lat_center * pi/180);  % meters per degree longitude
+            lat_scale = 111000;  % meters per degree latitude
+
+            % Convert to meters
+            x_meters = (terrain_data.x - mean(terrain_data.x)) * lon_scale;
+            y_meters = (terrain_data.y - mean(terrain_data.y)) * lat_scale;
+
+            % Create terrain mesh
+            [X_terrain, Y_terrain] = meshgrid(x_meters, y_meters);
+
+            % Plot terrain surface
+            surf(X_terrain, Y_terrain, terrain_data.terrain, 'EdgeColor', 'none', 'FaceAlpha', 1, 'FaceColor', [0.97, 0.95, 0.91]); %0.97, 0.95, 0.91[0.756, 0.678, 0.525]0.85, 0.80, 0.75
+            % colormap(gca, 'summer');
+            lighting gouraud
+            material dull
+            light('Position', [0.1 0.4 0.4], 'Style', 'infinite');
+            % light('Position', [-1 -1 1], 'Style', 'infinite');
+
+            fprintf('Terrain plotted successfully [%d x %d]\n', size(X_terrain, 1), size(X_terrain, 2));
+        catch err
+            warning('Error plotting terrain');
+            terrain_data_available = false;
+        end
+    end
+
+    hold on;
+    % colormap(custom_cmap);  % Restore the custom colormap for flight path
+
+    %% Plot the wind field
+    % Configuration options
+    downsample = 2;  % Adjust this to control density
+    vertical_threshold = 0.2;  % Minimum vertical wind magnitude to display (m/s)
+    use_streamlines = true;  % Set to true for streamlines, false for quiver plot
+    streamline_density = 30;  % Number of streamlines to generate (only for streamlines)
+
+    % Create a mask for significant vertical wind
+    significant_vertical = abs(wind_field.U) >= vertical_threshold;
+
+    if ~use_streamlines  % QUIVER PLOT APPROACH
+        % Create a combined mask that both downsamples and checks for significance
+        mask = false(size(wind_field.X));
+        mask(1:downsample:end, 1:downsample:end, 1:downsample:end) = true;
+        mask = mask & significant_vertical;
+
+        % Plot only where the mask is true
+        quiver3(wind_field.X(mask), wind_field.Y(mask), wind_field.Z(mask), ...
+                wind_field.Wx(mask), wind_field.Wy(mask), wind_field.U(mask), ...
+                'Color', [0.8 0.8 0.8], 'LineWidth', 0.8, 'MaxHeadSize', 0.3);
+    else  % STREAMLINE APPROACH
+        % Create start points for streamlines
+        % Generate random starting points across the domain, focusing on lower altitudes
+        [ny, nx, nz] = size(wind_field.X);
+
+        % Start positions - spreading them throughout the volume
+        % Biasing toward areas with significant vertical wind
+        [y_idx, x_idx, z_idx] = ind2sub(size(significant_vertical), ...
+            find(significant_vertical & rand(size(significant_vertical)) < 0.01));
+
+        % Limit to a reasonable number of streamlines
+        if length(y_idx) > streamline_density
+            select_idx = randperm(length(y_idx), streamline_density);
+            y_idx = y_idx(select_idx);
+            x_idx = x_idx(select_idx);
+            z_idx = z_idx(select_idx);
+        elseif isempty(y_idx)
+            % Fallback if no significant vertical wind points found
+            [y_grid, x_grid, z_grid] = ndgrid(...
+                round(linspace(1, ny, 5)), ...
+                round(linspace(1, nx, 5)), ...
+                round(linspace(1, nz, 4)));
+            y_idx = y_grid(:); x_idx = x_grid(:); z_idx = z_grid(:);
+        end
+
+        % Extract start positions in x,y,z coordinates
+        start_x = reshape(wind_field.X(sub2ind(size(wind_field.X), y_idx, x_idx, z_idx)), [], 1);
+        start_y = reshape(wind_field.Y(sub2ind(size(wind_field.Y), y_idx, x_idx, z_idx)), [], 1);
+        start_z = reshape(wind_field.Z(sub2ind(size(wind_field.Z), y_idx, x_idx, z_idx)), [], 1);
+
+        % Generate streamlines
+        h_streamlines = streamline(wind_field.X, wind_field.Y, wind_field.Z, ...
+            wind_field.Wx, wind_field.Wy, wind_field.U, ...
+            start_x, start_y, start_z);
+
+        % Style the streamlines
+        set(h_streamlines, 'Color', [0.85 0.85 0.85], 'LineWidth', 0.9);
+    end
+
+    fprintf('Wind field plotted with dimensions [%d x %d x %d]\n', ...
+    size(wind_field.X, 1), size(wind_field.X, 2), size(wind_field.X, 3));
+
+
+    %% Get custom colormap for flight path
+    [custom_cmap, ~] = init_colour_viridis();
+    colormap(custom_cmap);
+
+    % %% Plot the flight path with velocity-based coloring
+    % % Get velocities and min/max values
+    % % velocities = complete_path.states.V; %replacing with Airspeed for now
+    % velocities = complete_path.states.V_rel;
+    % 
+    % vel_min = aircraft.min_speed;
+    % vel_max = aircraft.max_speed;
+    % 
+    % % Direct mapping from velocity to colormap index
+    % for i = 1:length(velocities)-1
+    %     % Map velocity directly to color index (0-100 range)
+    %     color_idx = max(1, min(100, round((velocities(i) - vel_min) / (vel_max - vel_min) * 99) + 1));
+    % 
+    %     plot3([complete_path.states.x(i), complete_path.states.x(i+1)], ...
+    %           [complete_path.states.y(i), complete_path.states.y(i+1)], ...
+    %           [complete_path.states.z(i), complete_path.states.z(i+1)], ...
+    %           'Color', custom_cmap(color_idx,:), 'LineWidth', 1);
+    % end
+
+    %% Plot the flight path with mode-based coloring
+    % Get categorical colors for modes
+    [~, cat_colors] = init_colour_categorical();
+    
+    % Define mode field names for color mapping
+    mode_field_names = {'loiter', 'urgent', 'long_distance', 'balanced', 'energy_saving', 'regeneration'};
+    % mode_names = {'Loiter', 'Urgent', 'Long Dist.', 'Balanced', 'Energy Sav.', 'Regen.'};
+    
+    % Check if mode data exists, create placeholder if needed
+    if isfield(complete_path.states, 'mode')
+        mode_data = complete_path.states.mode;
+    else
+        % Default to balanced mode if not specified
+        mode_data = 4 * ones(1, complete_path.steps);
+    end
+    
+    % Find transitions between steps/modes
+    transitions = find(diff(mode_data) ~= 0);
+    transitions = [0, transitions, length(mode_data)];
+    
+    % Plot each path segment with appropriate mode color
+    for i = 1:length(transitions)-1
+        start_step = transitions(i) + 1;
+        end_step = transitions(i+1);
+        
+        % Map step indices to point indices in the path data
+        start_idx = (start_step-1)*20 + 1; 
+        end_idx = min(end_step*20, length(complete_path.states.x));
+        
+        % Get mode color
+        current_mode = mode_data(start_step);
+        if current_mode < 1 || current_mode > length(mode_field_names)
+            current_mode = 4; % Default to balanced mode
+        end
+        color = cat_colors.(mode_field_names{current_mode});
+        
+        % Plot this segment
+        plot3(complete_path.states.x(start_idx:end_idx), ...
+              complete_path.states.y(start_idx:end_idx), ...
+              complete_path.states.z(start_idx:end_idx), ...
+              'Color', color, 'LineWidth', 2);
+    end
+
+    %% Add waypoint and start markers
+    plot3(waypoint.x, waypoint.y, waypoint.z, 'r*', 'MarkerSize', 10, 'LineWidth', 2);
+
+    % Add a red circle around the waypoint to represent loiter radius
+    theta = linspace(0, 2*pi, 100); % Create evenly spaced points for a circle
+    radius = waypoint.loiter_within_r; % Use the loiter radius from waypoint structure
+    x_circle = waypoint.x + radius * cos(theta); % x coordinates of circle
+    y_circle = waypoint.y + radius * sin(theta); % y coordinates of circle
+    z_circle = waypoint.z * ones(size(theta)); % Same z level as waypoint
+    
+    % Plot the circle with a red dashed line
+    plot3(x_circle, y_circle, z_circle, 'r--', 'LineWidth', 1.5);
+
+    % % Define sphere properties
+    % radius = waypoint.loiter_within_r; % Change this to your desired sphere radius
+    % [x, y, z] = sphere(50); % Generates a sphere with 50x50 resolution
+    % 
+    % % Scale and translate sphere
+    % x = radius * x + waypoint.x;
+    % y = radius * y + waypoint.y;
+    % z = radius * z + waypoint.z;
+    % 
+    % % Plot sphere with transparency (without affecting colormap)
+    % surf(x, y, z, 'FaceColor', [0.6, 0.6, 0.6], 'FaceAlpha', 0.2, 'EdgeColor', 'none'); % Blue sphere with transparency
+
+
+    plot3(initial_state.x, initial_state.y, initial_state.z, 'go', 'MarkerSize', 10, 'LineWidth', 2);
+
+    % %% Set up colormap and colorbar
+    % colormap(custom_cmap);
+    % clim([vel_min, vel_max]);
+    % 
+    % % Add colorbar with simplified tick definition
+    % c = colorbar;
+    % ylabel(c, 'Airspeed (m/s)', 'FontWeight', 'bold');
+    % cbpos = get(c, 'Position');
+    % % Move the colorbar 0.5 cm to the right
+    % set(c, 'Position', [cbpos(1)+0.01 cbpos(2) cbpos(3) cbpos(4)]);
+    % 
+    % % Create ticks at every 5 m/s
+    % tick_range = vel_min:5:vel_max;
+    % set(c, 'Ticks', tick_range);
+    % 
+    % % Create tick labels with special labels for critical speeds
+    % tick_labels = cell(size(tick_range));
+    % for i = 1:length(tick_range)
+    %     tick_val = tick_range(i);
+    %     if abs(tick_val - aircraft.min_speed) < 0.1
+    %         tick_labels{i} = 'V_{min}';
+    %     elseif abs(tick_val - aircraft.cruise_speed) < 0.1
+    %         tick_labels{i} = 'V_{cruise}';
+    %     elseif abs(tick_val - aircraft.max_speed) < 0.1
+    %         tick_labels{i} = 'V_{max}';
+    %     else
+    %         tick_labels{i} = sprintf('%.0f', tick_val);
+    %     end
+    % end
+    % set(c, 'TickLabels', tick_labels);
+
+    %% Format axes and finalize the plot
+    xlabel('East (m)', 'FontWeight', 'bold');
+    ylabel('North (m)', 'FontWeight', 'bold');
+    zlabel('HAGL (m)', 'FontWeight', 'bold');
+
+    padding_left = 0.2;    % Left padding in cm
+    padding_bottom = 1; % Bottom padding in cm
+    padding_right = 0.0;   % Right padding in cm
+    padding_top = 0.1;   % Top padding in cm
+    
+    % Set position with padding (width and height calculated automatically)
+    fig_width = 17;      % Figure width in cm
+    fig_height = 10;     % Figure height in cm
+    plot_width = fig_width - padding_left - padding_right;
+    plot_height = fig_height - padding_bottom - padding_top;
+    
+    % Set axes position
+    set(gca, 'Units', 'centimeters');
+    set(gca, 'Position', [padding_left, padding_bottom, plot_width, plot_height]);
+
+    % Set view and grid
+    grid off;
+    view(24, 19); % was -45,30 for thermal long distance run
+
+    % Set axis limits based on content
+    if terrain_data_available
+        % Set limits to show all terrain plus some margin
+        xlim([min(x_meters) max(x_meters)]);
+        ylim([min(y_meters) max(y_meters)]);
+        zlim([min(min(terrain_data.terrain)) 820]); % was this before:max(max(complete_path.states.z))*1.1
+        axis equal;
+    else
+        % Default limits based on flight path
+        axis equal;
+        % Add some margin
+        ax = axis();
+        axis([ax(1:5) ax(6)*1.1]);
+    end
+
+    
+
+    % eastTicks = -500:100:500;  % East axis ticks every 100m
+    % northTicks = -1000:100:1000;  % North axis ticks every 200m
+    % haglTicks = 0:100:800;  % HAGL (Height Above Ground Level) ticks every 100m
+    % 
+    % set(gca, 'XTick', eastTicks);
+    % set(gca, 'YTick', northTicks);
+    % set(gca, 'ZTick', haglTicks);
+    % 
+    % % Optional: If you want to maintain a specific aspect ratio instead of "axis equal"
+    % % This gives you control over the relative scaling
+    % pbaspect([1 8 0.8]);  % Set East:North:HAGL proportions to 1:2:0.8
+
+    % Box off for cleaner appearance
+    box on;
+
+    %% Save the figure
+    date_folder = export_info.date_folder;
+    plot_type = '3d_path'; % Identifier for this specific plot type
+
+
+    if export_info.is_loaded
+        % Use pre-calculated sub-number 
+        original_num = export_info.original_num;
+
+        % Check if sub_num exists in export_info and is valid
+        if isfield(export_info, 'sub_num') && ~isnan(export_info.sub_num)
+            sub_num = export_info.sub_num;
+            fprintf('Using sub_num = %d for %s\n', sub_num, plot_type);
+        else
+            % Fallback if sub_num not available
+            sub_num = 1;
+            fprintf('Warning: Using default sub_num = 1 for %s\n', plot_type);
+        end
+
+        % Create filename with original number and sub-number
+        export_filename = fullfile(date_folder, [original_num, '_', num2str(sub_num), '_', plot_type, '.png']);
+
+    else
+        % Export for new data
+        if isfield(export_info, 'base_filename')
+            export_filename = fullfile(date_folder, [export_info.base_filename, '_', plot_type, '.png']);
+        else
+            % Fallback if no base filename provided
+            timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+            export_filename = fullfile(date_folder, ['flight_', plot_type, '_', timestamp, '.png']);
+        end
+    end
+
+    % Export the figure
+    try
+        export_fig(export_filename, '-m10', '-nocrop');
+        fprintf('3D flight path figure exported to: %s\n', export_filename);
+    catch
+        warning('Could not export figure using export_fig, using standard print instead');
+        try
+            print(export_filename, '-dpng', '-r300');
+            fprintf('Exported using standard print function\n');
+        catch
+            warning('Failed to export figure');
+        end
+    end
+end
+
+
+function plot_multi_metrics(complete_path, aircraft, export_info)
+    %% Plot multiple metrics in a 2x2 grid layout
+    % All plots share the same time axis for alignment
+
+    %% Set up global plotting settings - matching 3D path plot
+    set(0, 'DefaultAxesFontSize', 12);
+    set(0, 'DefaultFigureColor', 'w');
+    set(0, 'DefaultTextInterpreter', 'tex');
+    set(0, 'DefaultAxesFontName', 'Times New Roman');
+    set(0, 'DefaultTextFontName', 'Times New Roman');
+    set(0, 'DefaultLineLineWidth', 2); % Match line width with 3D plot
+
+    %% Create the figure with thesis-appropriate dimensions
+    fig_handle = figure;
+    set(fig_handle, 'Units', 'centimeters');
+    set(fig_handle, 'Position', [0 0 17 12]); % Match width with 3D plot (17cm)
+
+    % Get color theme
+    [~, named_colors] = init_colour();
+
+    %% Create a unified time axis based on the highest resolution data
+    data_length = length(complete_path.states.x);
+    time_axis = linspace(0, complete_path.steps*2, data_length);
+
+    %% Helper function to prepare data for plotting
+    function data_out = prepare_data(data_in, default_values)
+        % Convert to row vector
+        if ~isempty(data_in)
+            data_out = data_in(:)';
+
+            % Resample if lengths don't match
+            if length(data_out) ~= length(time_axis)
+                fprintf('Warning: Resampling data to match time axis length\n');
+                original_indices = 1:length(data_out);
+                query_indices = linspace(1, length(data_out), length(time_axis));
+
+                % Use nearest neighbor for categorical data, linear for continuous
+                if all(round(data_out) == data_out) % Integer/categorical data
+                    data_out = interp1(original_indices, data_out, query_indices, 'nearest');
+                else % Continuous data
+                    data_out = interp1(original_indices, data_out, query_indices, 'linear');
+                end
+            end
+        else
+            % Use default values if data doesn't exist
+            data_out = default_values(time_axis);
+        end
+    end
+
+
+    %% Create subplots in 2x2 grid
+    % 1. Operating Mode (Top Left)
+    ax1 = subplot(2, 2, 1);
+
+    % Get categorical colors for modes
+    [~, cat_colors] = init_colour_categorical();
+
+    % Prepare mode data
+    if isfield(complete_path.states, 'mode')
+        mode_data = prepare_data(complete_path.states.mode, @(t) ones(size(t)));
+    else
+        % Placeholder data with some variation
+        mode_data = ones(size(time_axis));
+        if length(mode_data) > 5
+            mode_change1 = round(length(mode_data)/3);
+            mode_change2 = round(2*length(mode_data)/3);
+            mode_data(mode_change1:mode_change2) = 4; 
+            mode_data(mode_change2:end) = 3;
+        end
+    end
+
+    % Set up mode names and their corresponding numbers
+    mode_names = {'Loiter', 'Urgent', 'Long Dist.', 'Thermal Climb', 'Energy Sav.', 'Regen.'};
+    mode_field_names = {'loiter', 'urgent', 'long_distance', 'balanced', 'energy_saving', 'regeneration'};
+
+    % Clear any existing plots
+    cla(ax1);
+    hold(ax1, 'on');
+
+    % Find transitions between modes
+    transitions = find(diff(mode_data) ~= 0);
+    transitions = [0, transitions, length(mode_data)];
+
+    % Draw colored bands for each mode section
+    for i = 1:length(transitions)-1
+        start_idx = transitions(i) + 1;
+        end_idx = transitions(i+1);
+
+        current_mode = mode_data(start_idx);
+        if current_mode < 1 || current_mode > length(mode_field_names)
+            current_mode = 4; % Default to balanced mode if out of range
+        end
+
+        % Get the color for this mode
+        color = cat_colors.(mode_field_names{current_mode});
+
+        % Create filled rectangle for this mode section
+        x_rect = [time_axis(start_idx), time_axis(end_idx), time_axis(end_idx), time_axis(start_idx)];
+        y_rect = [0.5, 0.5, 6.5, 6.5]; % Cover the full y-range
+
+        fill(x_rect, y_rect, color, 'EdgeColor', 'none', 'FaceAlpha', 0.8);
+
+        % Add text label if the section is wide enough (at least 10% of the plot width)
+        section_width = time_axis(end_idx) - time_axis(start_idx);
+        if section_width > (time_axis(end) * 0.03)
+            % Calculate center position for text
+            text_x = (time_axis(start_idx) + time_axis(end_idx)) / 2;
+            text_y = 3.5; % Center of y-range
+
+            % Add mode label with vertical orientation
+            text(text_x, text_y, mode_names{current_mode}, ...
+                'HorizontalAlignment', 'center', ...
+                'VerticalAlignment', 'middle', ...
+                'FontWeight', 'bold', ...
+                'Color', 'white', ...
+                'FontSize', 10, ...
+                'Rotation', 90);  % Vertical text orientation
+        end
+    end
+
+    % Format mode plot
+    % title('Operating Mode', 'FontWeight', 'bold');
+    % ylabel('Operating Mode', 'FontWeight', 'bold');
+
+    ylabel({'Operating'; 'Mode'},  'FontWeight', 'bold') 
+    set(get(gca,'YLabel'),'Rotation',0, 'VerticalAlignment','middle', 'HorizontalAlignment','right')  
+    ylim([0.5, 6.5]);
+
+    % Remove y-axis ticks and labels since we're using in-plot labels
+    set(ax1, 'YTick', []);
+    set(ax1, 'YTickLabel', {});
+
+    % Add border around the plot
+    box(ax1, 'on');
+    grid(ax1, 'off'); % No grid needed with the colored regions    
+
+
+
+
+
+    %% altitude plot
+    % 2. Altitude (Top Right)
+    ax2 = subplot(2, 2, 2);
+
+    % Prepare altitude data and mode data for coloring
+    altitude_data = prepare_data(complete_path.states.z, @(t) zeros(size(t)));
+
+    % Re-use the mode data we already prepared
+    if ~exist('mode_data_for_battery', 'var')
+        if isfield(complete_path.states, 'mode')
+            mode_data_for_altitude = prepare_data(complete_path.states.mode, @(t) ones(size(t)));
+        else
+            mode_data_for_altitude = ones(size(time_axis));
+            mode_data_for_altitude(round(length(time_axis)/3):end) = 4; % Sample variation
+        end
+    else
+        mode_data_for_altitude = mode_data_for_battery;
+    end
+
+    % Clear the axis
+    cla(ax2);
+    hold(ax2, 'on');
+
+    % Find transitions between modes
+    transitions = find(diff(mode_data_for_altitude) ~= 0);
+    transitions = [0, transitions, length(mode_data_for_altitude)];
+
+    % Plot altitude segments with mode-based coloring
+    for i = 1:length(transitions)-1
+        start_idx = transitions(i) + 1;
+        end_idx = transitions(i+1);
+
+        current_mode = mode_data_for_altitude(start_idx);
+        if current_mode < 1 || current_mode > length(mode_field_names)
+            current_mode = 4; % Default to balanced mode if out of range
+        end
+
+        % Get the color for this mode
+        color = cat_colors.(mode_field_names{current_mode});
+
+        % Plot this segment of the altitude line
+        plot(time_axis(start_idx:end_idx), altitude_data(start_idx:end_idx), ...
+            'LineWidth', 2, 'Color', color);
+    end
+
+    % Format altitude plot
+    % ylabel('Altitude (m)', 'FontWeight', 'bold');
+    ylabel({'↑'; 'Altitude'; '(m)'},  'FontWeight', 'bold') 
+    set(get(gca,'YLabel'),'Rotation',0, 'VerticalAlignment','middle', 'HorizontalAlignment','right')  
+    % title('Altitude', 'FontWeight', 'bold');
+
+    % Get current y-limits
+    y_limits = ylim(ax2);
+
+    % Create tick marks at regular intervals (every 100m)
+    altitude_interval = 50; % meters between tick marks
+    altitude_ticks = floor(y_limits(1)/altitude_interval)*altitude_interval:altitude_interval:ceil(y_limits(2)/altitude_interval)*altitude_interval;
+    altitude_tick_labels = cell(size(altitude_ticks));
+
+    % Add meter unit to tick labels
+    for i = 1:length(altitude_ticks)
+        altitude_tick_labels{i} = [num2str(altitude_ticks(i)), ' m'];
+    end
+
+    set(ax2, 'YTick', altitude_ticks);
+    set(ax2, 'YTickLabel', altitude_tick_labels);
+
+    grid off; 
+    box on; 
+
+    %% THE BATTERY PLOT
+    % 3. Battery Level (Bottom Left)
+    ax3 = subplot(2, 2, 3);
+
+    % Prepare battery data and mode data for coloring
+    if isfield(complete_path.states, 'battery_per')
+        battery_data = prepare_data(complete_path.states.battery_per, @(t) linspace(100, 70, length(t)));
+    else
+        % Placeholder linear decreasing battery data
+        battery_data = linspace(100, 70, length(time_axis));
+    end
+
+    if isfield(complete_path.states, 'mode')
+        mode_data_for_battery = prepare_data(complete_path.states.mode, @(t) ones(size(t)));
+    else
+        % Default mode data if not available
+        mode_data_for_battery = ones(size(time_axis));
+        mode_data_for_battery(round(length(time_axis)/3):end) = 4; % Sample variation
+    end
+
+    % Clear the axis
+    cla(ax3);
+    hold(ax3, 'on');
+
+    % Find transitions between modes
+    transitions = find(diff(mode_data_for_battery) ~= 0);
+    transitions = [0, transitions, length(mode_data_for_battery)];
+
+    % Plot battery segments with mode-based coloring
+    for i = 1:length(transitions)-1
+        start_idx = transitions(i) + 1;
+        end_idx = transitions(i+1);
+
+        current_mode = mode_data_for_battery(start_idx);
+        if current_mode < 1 || current_mode > length(mode_field_names)
+            current_mode = 4; % Default to balanced mode if out of range
+        end
+
+        % Get the color for this mode
+        color = cat_colors.(mode_field_names{current_mode});
+
+        % Plot this segment of the battery level line
+        plot(time_axis(start_idx:end_idx), battery_data(start_idx:end_idx), ...
+            'LineWidth', 2, 'Color', color);
+
+        % Add filled area beneath the line for visual emphasis
+        x_fill = [time_axis(start_idx:end_idx), fliplr(time_axis(start_idx:end_idx))];
+        y_fill = [battery_data(start_idx:end_idx), zeros(1, end_idx-start_idx+1)];
+        fill(x_fill, y_fill, color, 'FaceAlpha', 0.3, 'EdgeColor', 'none');
+    end
+
+    % Format battery plot
+    % ylabel('Battery Level (%)', 'FontWeight', 'bold');
+
+    ylabel({'↑'; 'Battery'; 'Capacity'; '(%)'},  'FontWeight', 'bold') 
+    set(get(gca,'YLabel'),'Rotation',0, 'VerticalAlignment','middle', 'HorizontalAlignment','right') 
+
+    % title('Battery Level (%)', 'FontWeight', 'bold');
+    xlabel('Time (seconds)', 'FontWeight', 'bold');
+    battery_min_display = 40; % Minimum battery percentage to display
+    battery_max_display = 60; % Maximum with some padding above 100%
+    ylim([battery_min_display, battery_max_display]);
+
+    % Create tick marks at regular intervals
+    battery_ticks = battery_min_display:10:battery_max_display;
+    battery_tick_labels = cell(size(battery_ticks));
+
+    % Add percentage symbols to tick labels
+    for i = 1:length(battery_ticks)
+        battery_tick_labels{i} = [num2str(battery_ticks(i)), '%'];
+    end
+
+    set(ax3, 'YTick', battery_ticks);
+    set(ax3, 'YTickLabel', battery_tick_labels);
+
+    grid off; 
+    box on; 
+
+
+
+    %% THE VELOCITY PLOT
+    % 4. Velocity Comparison (Bottom Right)
+    ax4 = subplot(2, 2, 4);
+
+    % set(gca,'YAxisLocation','right')
+
+    % Prepare velocity data
+    v_ground = prepare_data(complete_path.states.V, @(t) zeros(size(t)));
+    v_air = prepare_data(complete_path.states.V_rel, @(t) zeros(size(t)));
+
+    % Plot both velocities and store handles for the legend
+    hold on;
+    h_ground = plot(time_axis, v_ground, 'LineWidth', 1, 'Color', named_colors.yellow);
+    h_air = plot(time_axis, v_air, 'LineWidth', 1, 'Color', [0,0,0]);
+
+    % Create filled area between the two velocity lines
+    x_fill = [time_axis, fliplr(time_axis)];
+    y_fill = [v_ground, fliplr(v_air)];
+    h_fill = fill(x_fill, y_fill, named_colors.yellow, 'FaceAlpha', 0.5, 'EdgeColor', 'none');
+
+    % Send the fill to the bottom of the stack so lines are visible
+    uistack(h_fill, 'bottom');
+
+
+
+    % 
+    % % Create filled area between the two velocity lines
+    % x_fill = [time_axis, fliplr(time_axis)];
+    % y_fill = [v_ground, fliplr(v_air)];
+    % fill(x_fill, y_fill, named_colors.yellow, 'FaceAlpha', 0.5, 'EdgeColor', 'none');
+    % uistack(findobj(ax4, 'Type', 'patch'), 'bottom'); % Ensure fill is at bottom
+
+    hold on;
+
+    % % Plot both velocities
+    % plot(time_axis, v_ground, 'LineWidth', 1, 'Color', named_colors.yellow);
+    % plot(time_axis, v_air, 'LineWidth', 1, 'Color', [0,0,0]);
+
+    ylabel({'↑'; 'Velocity'; '(m/s)'},  'FontWeight', 'bold') 
+    set(get(gca,'YLabel'),'Rotation',0, 'VerticalAlignment','middle', 'HorizontalAlignment','right')  
+
+    xlabel('Time (seconds)', 'FontWeight', 'bold');
+    legend([h_ground, h_air], {'Ground Speed (V)', 'Airspeed (V_{rel})'}, 'Location', 'best');
+
+
+    % Set axis limits
+    % ylim([max(0, aircraft.min_speed*0.9), 20*1.05]);
+    ylim([0, 35*1.05]);
+
+    % Set specific ticks for min, cruise, max speeds
+    % set(ax4, 'YTick', [aircraft.min_speed, 12, aircraft.cruise_speed, 18, 20]);
+    % set(ax4, 'YTickLabel', {'V_{stall}','12 m/s', 'V_{cruise}', '18 m/s', '20 m/s'});
+
+
+    set(ax4, 'YTick', [0,5, aircraft.min_speed, aircraft.cruise_speed, 20, 25, 30, 35]);
+    set(ax4, 'YTickLabel', {'0 m/s', '5 m/s', 'V_{stall}', 'V_{cruise}', '20 m/s', '25 m/s', '30 m/s', '35 m/s'});
+
+    grid off; 
+    box on; 
+
+
+
+    %% Align time axes across all subplots
+    % Set the same x limits for all subplots
+    xlim([ax1, ax2, ax3, ax4], [0, time_axis(end)]);
+
+    % Align the plots vertically
+    for ax = [ax1, ax2]
+        xlabel(ax, ''); % Remove xlabel from top row
+    end
+
+    %% Adjust subplot spacing and positioning with fine-grained control
+    % These parameters give individual control over all spacing aspects
+    % All values are normalized to figure dimensions (0-1)
+
+    % ADJUSTABLE: Padding around the entire plot group
+    padding_left = 0.16;    % Padding from left edge of figure
+    padding_right = 0.018;   % Padding from right edge of figure  
+    padding_top = 0.0001;     % Padding from top edge of figure
+    padding_bottom = 0.081;  % Padding from bottom edge of figure (larger for xlabel)
+
+    % ADJUSTABLE: Spacing between subplots
+    spacing_horizontal = 0.16;  % Horizontal gap between plots
+    spacing_vertical = 0.16;    % Vertical gap between plots
+
+    % Calculate available space after padding
+    available_width = 1 - padding_left - padding_right;
+    available_height = 1 - padding_top - padding_bottom;
+
+    % Calculate subplot dimensions
+    subplot_width = (available_width - spacing_horizontal) / 2;
+    subplot_height = (available_height - spacing_vertical) / 2;
+
+    % Calculate positions for each subplot
+    % [left, bottom, width, height]
+    pos1 = [padding_left, 
+            padding_top + subplot_height + spacing_vertical, 
+            subplot_width, 
+            subplot_height];  % Top left (mode)
+
+    pos2 = [padding_left + subplot_width + spacing_horizontal, 
+            padding_top + subplot_height + spacing_vertical, 
+            subplot_width, 
+            subplot_height];  % Top right (altitude)
+
+    pos3 = [padding_left, 
+            padding_bottom, 
+            subplot_width, 
+            subplot_height];  % Bottom left (battery)
+
+    pos4 = [padding_left + subplot_width + spacing_horizontal, 
+            padding_bottom, 
+            subplot_width, 
+            subplot_height];  % Bottom right (velocity)
+
+    % Position the subplots
+    set(ax1, 'Position', pos1);
+    set(ax2, 'Position', pos2);
+    set(ax3, 'Position', pos3);
+    set(ax4, 'Position', pos4);
+
+    %% Save the figure
+    date_folder = export_info.date_folder;
+    plot_type = 'multi_metrics'; % Identifier for this specific plot type
+
+    if export_info.is_loaded
+        % Use pre-calculated sub-number 
+        original_num = export_info.original_num;
+
+        % Check if sub_num exists in export_info and is valid
+        if isfield(export_info, 'sub_num') && ~isnan(export_info.sub_num)
+            sub_num = export_info.sub_num;
+            fprintf('Using sub_num = %d for %s\n', sub_num, plot_type);
+        else
+            % Fallback if sub_num not available
+            sub_num = 1;
+            fprintf('Warning: Using default sub_num = 1 for %s\n', plot_type);
+        end
+
+        % Create filename with original number and sub-number
+        export_filename = fullfile(date_folder, [original_num, '_', num2str(sub_num), '_', plot_type, '.png']);
+    else
+        % Export for new data
+        if isfield(export_info, 'base_filename')
+            export_filename = fullfile(date_folder, [export_info.base_filename, '_', plot_type, '.png']);
+        else
+            % Fallback if no base filename provided
+            timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+            export_filename = fullfile(date_folder, ['flight_', plot_type, '_', timestamp, '.png']);
+        end
+    end
+
+    % Export the figure with the same DPI and settings as 3D plot
+    try
+        export_fig(export_filename, '-m5', '-nocrop'); % Match export settings
+        fprintf('Multi-metrics figure exported to: %s\n', export_filename);
+    catch
+        warning('Could not export figure using export_fig');
+        % Fallback to standard MATLAB export
+        saveas(fig_handle, export_filename);
+        fprintf('Exported using standard MATLAB saveas function.\n');
+    end
+end
+
+
+
+
+% function fig_handle = plot_velocity_comparison(complete_path, aircraft, export_info)
+%     %% Plot velocity comparison (ground speed vs airspeed)
+%     %
+%     % Inputs:
+%     %   complete_path - Structure containing full path and state information
+%     %   aircraft      - Structure with aircraft parameters
+%     %   export_info   - Structure with export settings
+%     %
+%     % Output:
+%     %   fig_handle    - Handle to the created figure
+% 
+%     %% Set up global plotting settings
+%     set(0, 'DefaultAxesFontSize', 12);
+%     set(0, 'DefaultFigureColor', 'w');
+%     set(0, 'DefaultTextInterpreter', 'tex');
+%     set(0, 'DefaultAxesFontName', 'Times New Roman');
+%     set(0, 'DefaultTextFontName', 'Times New Roman');
+% 
+%     %% Create the figure
+%     % Create figure with thesis-appropriate dimensions
+%     fig_handle = figure;
+%     set(fig_handle, 'Units', 'centimeters');
+%     set(fig_handle, 'Position', [0 0 17 13]); % Width and height in centimeters
+% 
+%     %% Plot the velocity comparison
+%     % Get the data
+%     v_ground = complete_path.states.V;
+%     v_air = complete_path.states.V_rel;
+%     data_length = length(v_ground);
+% 
+%     % Create a simple time axis that matches the data length
+%     time_axis = linspace(0, complete_path.steps*2, data_length);
+% 
+%     [~, named_colors] = init_colour();
+% 
+%     % Define custom colors to match the 3D path plot
+%     % orange = named_colors.yellow;
+%     % blue = named_colors.blue;
+% 
+%     x_fill = [time_axis, fliplr(time_axis)];
+%     y_fill = [v_ground, fliplr(v_air)];
+%     fill(x_fill, y_fill, named_colors.yellow, 'FaceAlpha', 0.5, 'EdgeColor', 'none');
+% 
+%     % Make sure the filled area is behind the lines
+%     uistack(findobj(gca, 'Type', 'patch'), 'bottom');
+% 
+% 
+%     % Plot with both velocities
+%     plot(time_axis, v_ground, 'LineWidth', 2, 'Color', [0.8,0.8,0.8]);
+%     hold on;
+%     plot(time_axis, v_air, 'LineWidth', 2, 'Color', [0,0,0]);
+% 
+%     % Add stall speed reference line
+%     stall_speed = aircraft.min_speed;
+%     % plot([time_axis(1), time_axis(end)], [stall_speed, stall_speed], 'k-.', 'LineWidth', 1.5);
+% 
+%     % Format plot
+%     xlabel('Time (seconds)', 'FontWeight', 'bold');
+%     ylabel('Velocity (m/s)', 'FontWeight', 'bold');
+%     % title('Ground Speed vs Airspeed Comparison', 'FontWeight', 'bold');
+%     legend('Ground Speed (V)', 'Airspeed (V_{rel})');
+%     grid on;
+% 
+%     % Set axis limits
+%     ylim([max(0, stall_speed*0.9), aircraft.max_speed*1.05]);
+% 
+%     % Set specific ticks for min, cruise, max speeds and some extra reference points
+%     set(gca,'YTick',[aircraft.min_speed, aircraft.cruise_speed, 20, 25, aircraft.max_speed]);
+% 
+%     % Set corresponding labels directly
+%     set(gca,'YTickLabel',{'V_{min}', 'V_{cruise}','20', '25', 'V_{max}'});
+%     xlim([0, time_axis(end)]);
+% 
+%     % Set position of axes in the figure for consistency
+%     set(gca, 'Units', 'centimeters');
+%     set(gca, 'Position', [2 1.5 11 10]);
+% 
+%     % Add annotation with statistics
+%     avg_diff = mean(abs(v_ground - v_air));
+%     max_diff = max(abs(v_ground - v_air));
+%     % stats_text = sprintf('Simulation duration: %.1f seconds\nAvg speed difference: %.2f m/s\nMax speed difference: %.2f m/s', ...
+%     %                     complete_path.steps*2, avg_diff, max_diff);
+%     % annotation('textbox', [0.72, 0.15, 0.25, 0.15], ...
+%     %            'String', stats_text, ...
+%     %            'FitBoxToText', 'on', ...
+%     %            'BackgroundColor', [1 1 1 0.7], ...
+%     %            'EdgeColor', [0.8 0.8 0.8]);
+% 
+%     % Print stats to command window
+%     fprintf('\n===== Velocity Comparison Statistics =====\n');
+%     fprintf('Simulation steps: %d (%.1f seconds)\n', complete_path.steps, complete_path.steps*2);
+%     fprintf('Data points: %d\n', data_length);
+%     fprintf('Average difference between ground and air speed: %.2f m/s\n', avg_diff);
+%     fprintf('Maximum difference between ground and air speed: %.2f m/s\n', max_diff);
+% 
+%     %% Save the figure
+%     date_folder = export_info.date_folder;
+%     plot_type = 'V_V_rel'; % Identifier for this specific plot type
+% 
+%     if export_info.is_loaded
+%         % Use pre-calculated sub-number 
+%         original_num = export_info.original_num;
+% 
+%         % Check if sub_num exists in export_info and is valid
+%         if isfield(export_info, 'sub_num') && ~isnan(export_info.sub_num)
+%             sub_num = export_info.sub_num;
+%             fprintf('Using sub_num = %d for %s\n', sub_num, plot_type);
+%         else
+%             % Fallback if sub_num not available
+%             sub_num = 1;
+%             fprintf('Warning: Using default sub_num = 1 for %s\n', plot_type);
+%         end
+% 
+%         % Create filename with original number and sub-number
+%         export_filename = fullfile(date_folder, [original_num, '_', num2str(sub_num), '_', plot_type, '.png']);
+% 
+% 
+% 
+%     else
+%         % Export for new data
+%         if isfield(export_info, 'base_filename')
+%             export_filename = fullfile(date_folder, [export_info.base_filename, '_', plot_type, '.png']);
+%         else
+%             % Fallback if no base filename provided
+%             timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+%             export_filename = fullfile(date_folder, ['flight_', plot_type, '_', timestamp, '.png']);
+%         end
+%     end
+% 
+%     % Export the figure
+%     try
+%         export_fig(export_filename, '-m5', '-nocrop');
+%         fprintf('Velocity comparison figure exported to: %s\n', export_filename);
+%     catch
+%         warning('Could not export figure using export_fig');
+%     end
+% end
+% 
+
+% function fig_handle = plot_3d_path(complete_path, wind_field, initial_state, aircraft, export_info, terrain_data)
+%     %% Plot 3D flight path with wind field
+%     %
+%     % Inputs:
+%     %   complete_path - Structure containing full path and state information
+%     %   wind_field    - Structure containing wind field data
+%     %   initial_state - Structure with initial aircraft state
+%     %   aircraft      - Structure with aircraft parameters
+%     %   export_info   - Structure with export settings
+%     %
+%     % Output:
+%     %   fig_handle    - Handle to the created figure
+% 
+%     %% Set up global plotting settings
+%     set(0, 'DefaultAxesFontSize', 12);
+%     set(0, 'DefaultFigureColor', 'w');
+%     set(0, 'DefaultTextInterpreter', 'tex');
+%     set(0, 'DefaultAxesFontName', 'Times New Roman');
+%     set(0, 'DefaultTextFontName', 'Times New Roman');
+% 
+%     %% Create the figure
+%     % Get waypoint information
+%     waypoint = init_waypoint();
+% 
+%     % Create figure with thesis-appropriate dimensions
+%     fig_handle = figure;
+%     set(fig_handle, 'Units', 'centimeters');
+%     set(fig_handle, 'Position', [0 0 17 13]); % Width and height in centimeters
+% 
+%     % %% Plot the wind field
+%     % quiver3(wind_field.X, wind_field.Y, wind_field.Z, ...
+%     %     wind_field.Wx, wind_field.Wy, wind_field.U, ...
+%     %     'Color', [0.7 0.7 0.7], 'LineWidth', 0.01);
+%     % hold on
+% 
+% 
+% 
+% %     %% Plot the wind field
+% %     % Downsample the grid first to reduce density
+% %     downsample = 4; % Adjust this value to control overall density of arrows
+% % 
+% %     % Skip points using downsample
+% %     X_ds = wind_field.X(1:downsample:end, 1:downsample:end, 1:downsample:end);
+% %     Y_ds = wind_field.Y(1:downsample:end, 1:downsample:end, 1:downsample:end);
+% %     Z_ds = wind_field.Z(1:downsample:end, 1:downsample:end, 1:downsample:end);
+% %     Wx_ds = wind_field.Wx(1:downsample:end, 1:downsample:end, 1:downsample:end);
+% %     Wy_ds = wind_field.Wy(1:downsample:end, 1:downsample:end, 1:downsample:end);
+% %     U_ds = wind_field.U(1:downsample:end, 1:downsample:end, 1:downsample:end);
+% % 
+% %     % Create a mask based only on vertical wind magnitude
+% %     vertical_threshold = 0.5; % Show winds with vertical component above this threshold (m/s)
+% %     mask = abs(U_ds) >= vertical_threshold;
+% % 
+% %     % Create masked arrays for plotting (only where significant vertical wind exists)
+% %     X_plot = X_ds(mask);
+% %     Y_plot = Y_ds(mask);
+% %     Z_plot = Z_ds(mask);
+% %     Wx_plot = Wx_ds(mask);
+% %     Wy_plot = Wy_ds(mask);
+% %     U_plot = U_ds(mask);
+% % 
+% %     % Plot using only the filtered points
+% %     if ~isempty(X_plot)
+% %         quiver3(X_plot, Y_plot, Z_plot, Wx_plot, Wy_plot, U_plot, ...
+% %                'Color', [0.7 0.7 0.7], 'LineWidth', 0.2);
+% %     else
+% %         fprintf('Warning: No wind vectors meet the display criteria.\n');
+% %     end
+% % 
+% %     % Ensure proper plot boundaries are maintained
+% %     xlim([min(wind_field.x), max(wind_field.x)]);
+% %     ylim([min(wind_field.y), max(wind_field.y)]);
+% %     zlim([min(wind_field.z), max(wind_field.z)]);
+% % % 
+% % hold on
+% 
+% 
+%     %% Plot the wind field
+%     % Configuration options
+%     downsample = 2;  % Adjust this to control density
+%     vertical_threshold = 0.001;  % Minimum vertical wind magnitude to display (m/s)
+%     use_streamlines = false;  % Set to true for streamlines, false for quiver plot
+%     streamline_density = 30;  % Number of streamlines to generate (only when use_streamlines=true)
+% 
+%     % Create logical mask for where vertical wind is significant
+%     significant_vertical = abs(wind_field.U) >= vertical_threshold;
+% 
+%     if ~use_streamlines  % QUIVER PLOT APPROACH
+%         % Create a combined mask that both downsamples and checks for significance
+%         mask = false(size(wind_field.X));
+%         mask(1:downsample:end, 1:downsample:end, 1:downsample:end) = true;
+%         mask = mask & significant_vertical;
+% 
+%         % Plot only where the mask is true
+%         quiver3(wind_field.X(mask), wind_field.Y(mask), wind_field.Z(mask), ...
+%                 wind_field.Wx(mask), wind_field.Wy(mask), wind_field.U(mask), ...
+%                 'Color', [0.7 0.7 0.7], 'LineWidth', 0.1);
+%     else  % STREAMLINE APPROACH
+%         % Create start points for streamlines
+%         % Generate random starting points across the domain, focusing on lower altitudes
+%         [ny, nx, nz] = size(wind_field.X);
+% 
+%         % Start positions - spreading them throughout the volume
+%         % Biasing toward areas with significant vertical wind
+%         [y_idx, x_idx, z_idx] = ind2sub(size(significant_vertical), ...
+%             find(significant_vertical & rand(size(significant_vertical)) < 0.01));
+% 
+%         % Limit to a reasonable number of streamlines
+%         if length(y_idx) > streamline_density
+%             select_idx = randperm(length(y_idx), streamline_density);
+%             y_idx = y_idx(select_idx);
+%             x_idx = x_idx(select_idx);
+%             z_idx = z_idx(select_idx);
+%         elseif isempty(y_idx)
+%             % Fallback if no significant vertical wind points found
+%             [y_idx, x_idx, z_idx] = ndgrid(...
+%                 round(linspace(1, ny, 5)), ...
+%                 round(linspace(1, nx, 5)), ...
+%                 round(linspace(1, nz, 4)));
+%             y_idx = y_idx(:); x_idx = x_idx(:); z_idx = z_idx(:);
+%         end
+% 
+%         % Extract start positions in x,y,z coordinates
+%         start_x = reshape(wind_field.X(sub2ind(size(wind_field.X), y_idx, x_idx, z_idx)), [], 1);
+%         start_y = reshape(wind_field.Y(sub2ind(size(wind_field.Y), y_idx, x_idx, z_idx)), [], 1);
+%         start_z = reshape(wind_field.Z(sub2ind(size(wind_field.Z), y_idx, x_idx, z_idx)), [], 1);
+% 
+%         % Generate streamlines
+%         h_streamlines = streamline(wind_field.X, wind_field.Y, wind_field.Z, ...
+%             wind_field.Wx, wind_field.Wy, wind_field.U, ...
+%             start_x, start_y, start_z);
+% 
+%         % Style the streamlines
+%         set(h_streamlines, 'Color', [0.7 0.7 0.7], 'LineWidth', 0.8);
+%     end
+% 
+%     hold on
+% 
+%     %% Plot terrain if available
+%     if exist('terrain_data', 'var') && ~isempty(terrain_data) && isstruct(terrain_data)
+%         try
+%             % Get coordinate conversion factors
+%             lat_center = mean(terrain_data.y);
+%             lon_scale = 111000 * cos(lat_center * pi/180);  % Meters per degree longitude
+%             lat_scale = 111000;  % Meters per degree latitude
+% 
+%             % Convert to meters
+%             x_meters = (terrain_data.x - mean(terrain_data.x)) * lon_scale;
+%             y_meters = (terrain_data.y - mean(terrain_data.y)) * lat_scale;
+% 
+%             % Create terrain mesh
+%             [X_terrain, Y_terrain] = meshgrid(x_meters, y_meters);
+% 
+%             % Plot terrain surface
+%             surf(X_terrain, Y_terrain, terrain_data.terrain, 'EdgeColor', 'none', 'FaceAlpha', 0.7);
+%             colormap(gca, 'terrain');
+% 
+%             fprintf('Terrain plotted successfully\n');
+%         catch err
+%             warning('Error plotting terrain: %s', err.message);
+%         end
+%     end
+% 
+%     hold on;
+% 
+%     %% Plot the flight path with velocity-based coloring
+%     % Define custom colormap using spectral colors
+%     % custom_colors = {
+%     %     '#9e0142', '#d53e4f', '#f46d43', '#fdae61', '#fee08b', ...
+%     %     '#e6f598', '#abdda4', '#66c2a5', '#3288bd', '#5e4fa2'
+%     % };
+%     % 
+%     % % Convert hex to RGB
+%     % custom_rgb = zeros(length(custom_colors), 3);
+%     % for i = 1:length(custom_colors)
+%     %     hex = custom_colors{i}(2:end);
+%     %     custom_rgb(i, 1) = hex2dec(hex(1:2))/255; % Red
+%     %     custom_rgb(i, 2) = hex2dec(hex(3:4))/255; % Green
+%     %     custom_rgb(i, 3) = hex2dec(hex(5:6))/255; % Blue
+%     % end
+% 
+%     % Interpolate to create a 100-step colormap
+%     % custom_cmap = interp1(linspace(0, 1, size(custom_rgb, 1)), custom_rgb, linspace(0, 1, 100));
+% 
+%     [custom_cmap, ~] = init_colour();
+% 
+%     % Get velocities and min/max values
+%     velocities = complete_path.states.V;
+%     vel_min = aircraft.min_speed;
+%     vel_max = aircraft.max_speed;
+% 
+%     % Direct mapping from velocity to colormap index
+%     for i = 1:length(velocities)-1
+%         % Map velocity directly to color index (0-100 range)
+%         color_idx = max(1, min(100, round((velocities(i) - vel_min) / (vel_max - vel_min) * 99) + 1));
+% 
+%         plot3([complete_path.states.x(i), complete_path.states.x(i+1)], ...
+%               [complete_path.states.y(i), complete_path.states.y(i+1)], ...
+%               [complete_path.states.z(i), complete_path.states.z(i+1)], ...
+%               'Color', custom_cmap(color_idx,:), 'LineWidth', 2);
+%     end
+% 
+%     %% Add waypoint and start markers
+%     plot3(waypoint.x, waypoint.y, waypoint.z, 'r*', 'MarkerSize', 10, 'LineWidth', 2);
+%     plot3(initial_state.x, initial_state.y, initial_state.z, 'go', 'MarkerSize', 10, 'LineWidth', 2);
+% 
+%     %% Set up colormap and colorbar
+%     colormap(custom_cmap);
+%     clim([vel_min, vel_max]);
+% 
+%     % Add colorbar with simplified tick definition
+%     c = colorbar;
+%     ylabel(c, 'Ground Speed (m/s)', 'FontWeight', 'bold');
+%     cbpos = get(c, 'Position');
+%     % Move the colorbar 0.5 cm to the right
+%     set(c, 'Position', [cbpos(1)+0.01 cbpos(2) cbpos(3) cbpos(4)]);
+% 
+%     % Create ticks at every 5 m/s
+%     tick_range = vel_min:5:vel_max;
+%     set(c, 'Ticks', tick_range);
+% 
+%     % Create tick labels with special labels for critical speeds
+%     tick_labels = cell(size(tick_range));
+%     for i = 1:length(tick_range)
+%         tick_val = tick_range(i);
+%         if abs(tick_val - aircraft.min_speed) < 0.1
+%             tick_labels{i} = 'V_{min}';
+%         elseif abs(tick_val - aircraft.cruise_speed) < 0.1
+%             tick_labels{i} = 'V_{cruise}';
+%         elseif abs(tick_val - aircraft.max_speed) < 0.1
+%             tick_labels{i} = 'V_{max}';
+%         else
+%             tick_labels{i} = sprintf('%.0f', tick_val);
+%         end
+%     end
+%     set(c, 'TickLabels', tick_labels);
+% 
+%     %% Format axes and finalize the plot
+%     xlabel('East (m)', 'FontWeight', 'bold');
+%     ylabel('North (m)', 'FontWeight', 'bold');
+%     zlabel('HAGL (m)', 'FontWeight', 'bold');
+% 
+%     % Set position of axes in the figure for consistency
+%     set(gca, 'Units', 'centimeters');
+%     set(gca, 'Position', [2 1.5 11 10]);
+% 
+%     % Set view and grid
+%     grid on;
+%     view(-45, 30);
+%     axis equal;
+% 
+%     % Box off for cleaner appearance
+%     box off;
+% 
+%     %% Save the figure
+%     date_folder = export_info.date_folder;
+%     plot_type = '3d_path'; % Identifier for this specific plot type
+% 
+%     if export_info.is_loaded
+%         % Use pre-calculated sub-number 
+%         original_num = export_info.original_num;
+% 
+%         % Check if sub_num exists in export_info and is valid
+%         if isfield(export_info, 'sub_num') && ~isnan(export_info.sub_num)
+%             sub_num = export_info.sub_num;
+%             fprintf('Using sub_num = %d for %s\n', sub_num, plot_type);
+%         else
+%             % Fallback if sub_num not available
+%             sub_num = 1;
+%             fprintf('Warning: Using default sub_num = 1 for %s\n', plot_type);
+%         end
+% 
+%         % Create filename with original number and sub-number
+%         export_filename = fullfile(date_folder, [original_num, '_', num2str(sub_num), '_', plot_type, '.png']);
+% 
+%     else
+%         % Export for new data
+%         if isfield(export_info, 'base_filename')
+%             export_filename = fullfile(date_folder, [export_info.base_filename, '_', plot_type, '.png']);
+%         else
+%             % Fallback if no base filename provided
+%             timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+%             export_filename = fullfile(date_folder, ['flight_', plot_type, '_', timestamp, '.png']);
+%         end
+%     end
+%     % Export the figure
+%     try
+%         export_fig(export_filename, '-m5', '-nocrop');
+%         fprintf('3D flight path figure exported to: %s\n', export_filename);
+%     catch
+%         warning('Could not export figure using export_fig');
+%     end
+% end

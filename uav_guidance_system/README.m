@@ -1,14 +1,9 @@
 % This project aims to find the optimal route for a fixed wing delivery
 % drone given a wind feild
 
-% To run: first run statup.m to add all the paths
+% To run: test_mutli_step_path.m
 
 % /
-% ├── main.m (NOT CREATED YET)
-% │   ├── Main simulation loop
-% │   ├── Time step management
-% │   ├── Results collection
-% │   └── Visualisation calls
 % │
 % ├── init/
 % │   ├── init_aircraft.m       
@@ -41,8 +36,8 @@
 % │   │   └── Generates paths, calculates rewards, sorts paths
 % │   │
 % │   ├── calculate_reward.m  
-% │   │   ├── Potential energy (R_P) (NOT CREATED YET)
-% │   │   ├── Kinetic energy (R_K) (NOT CREATED YET)
+% │   │   ├── Potential energy (R_P)
+% │   │   ├── Kinetic energy (R_K) 
 % │   │   ├── Updraft reward (R_U)
 % │   │   ├── Navigation reward (R_N) 
 % │   │   └── Returns total reward calculation
@@ -50,7 +45,7 @@
 % │   ├── flight_dynamics.m
 % │   │   ├── 3-DOF equations
 % │   │   ├── State propagation
-% │   │   └── Energy calculations (NOT CREATED YET)
+% │   │   └── Energy calculations
 % │   │
 % │   ├── generate_multi_step_path.m
 % │   │   ├── takes in the inital position
@@ -91,7 +86,7 @@
 % │   │   ├── Calls and tests the generate_paths.m
 % │   │   └── Plots top down view and path flower in file
 % │   │
-% │   ├── test_flight_dynamics_2.m  (not working right now)
+% │   ├── test_flight_dynamics_2.m  
 % │   │   ├── Test straight flight
 % │   │   ├── Test turning flight
 % │   │   ├── Test wind effects
